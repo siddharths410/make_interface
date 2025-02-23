@@ -2,117 +2,132 @@ import numpy as np
 from ase import Atoms
 
 
-def unit_cells(
-    bulk: Atoms,
-    surface_index: np.ndarray,
-    Lmax: float,
-    theta_max=np.radians(135),
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Find surface unit cells of `bulk` with miller index `surface_index`,
-    such that both in-plane lattice vectors are shorter than `Lmax` 
-    and have a reasonable angle between 90 degrees and `theta_max`.
-    Returns the surface linear combinations (N x 2 x 3), along with the
-    corresponding lattice vector lengths (N x 2) and cos(angle)'s (N).
-    The two lattice vectors are in ascending length order for each case.
-    """
-    
-    # Get lattice vectors and compute their lengths:
-    vectors = lattice_vectors(bulk, surface_index, Lmax)
-    RT = bulk.cell[:]
-    vectors_cart = vectors @ RT
-    vector_lengths = np.linalg.norm(vectors @ RT, axis=1)
-    
-    # Compute cos(angle) between all pairs of vectors
-    cos_theta = (
-        (vectors_cart @ vectors_cart.T) / np.outer(vector_lengths, vector_lengths)
-    )
+class Surfaces:
+    """List of possible surface supercells, constrained by surface size."""
+    bulk: Atoms  #: Reference bulk structure
+    sup: np.ndarray  #: N x 3 x 3 linear combinations defining each supercell
+    a: np.ndarray  #: N lengths (Angstroms) of shorter in-plane lattice vector
+    b: np.ndarray  #: N lengths (Angstroms) of longer in-plane lattice vector
+    theta: np.ndarray  #: N angles (radians) between in-plane lattice vectors
+    area: np.ndarray  #: N areas of the surface supercells
 
-    # Select pairs with v1 shorter than v2 and angle in range:
-    cos_theta_min = np.cos(theta_max)
-    cos_theta_max = 1E-12  # 90 degrees upto round-off threshold
-    sel1, sel2 = np.where(
-        (vector_lengths[:, None] <= vector_lengths[None, :])  # sort v1 shorter than v2
-        & (vectors[:, None, 0] >= 0)  # one of each pair of inversion partners WLOG
-        & (cos_theta >= cos_theta_min)
-        & (cos_theta <= cos_theta_max)
-    )
-    if not len(sel1):
-        raise KeyError(
-            f"No surface unit cells with lattice vector lengths <= {Lmax}"
-            "and a reasonable angle"
+    def __init__(
+        self,
+        bulk: Atoms,
+        surface_index: np.ndarray,
+        Lmax: float,
+        theta_max=np.radians(135),
+    ) -> None:
+        """
+        Find surface unit cells of `bulk` with miller index `surface_index`,
+        such that both in-plane lattice vectors are shorter than `Lmax` 
+        and have a reasonable angle between 90 degrees and `theta_max`.
+        
+        If `surface_index` is (0, 0, 0), this results in all surface supercells
+        with in-plane lengths less than `Lmax`, regardless of surface direction.
+        """ 
+
+        # Get lattice vectors and compute their lengths:
+        vectors = lattice_vectors(bulk, surface_index, Lmax)
+        RT = bulk.cell[:]
+        vectors_cart = vectors @ RT
+        vector_lengths = np.linalg.norm(vectors_cart, axis=1)
+        
+        # Compute angle between all pairs of vectors:
+        theta = np.arccos(
+            (vectors_cart @ vectors_cart.T) / np.outer(vector_lengths, vector_lengths)
         )
-    
-    # Collect selected pairs:
-    unit_cells = np.stack((vectors[sel1], vectors[sel2]), axis=1)
-    unit_cell_lengths = np.stack((vector_lengths[sel1], vector_lengths[sel2]), axis=1)
-    cos_theta = cos_theta[sel1, sel2]
-
-    # Sort by unit cell area and find unique lengths and angles:
-    cell_area = np.prod(unit_cell_lengths, axis=-1) * np.sqrt(1 - cos_theta**2)
-    
-    class SortKey:
-        """Indexed sorter of unit cells by area, angle and then individual lengths."""
-        def __init__(self, i):
-            self.index = i  # index into relevant arrays
-            self.keys = np.array(
-                [
-                    cell_area[i],
-                    np.arccos(cos_theta[i]),
-                    unit_cell_lengths[i, 0],
-                    unit_cell_lengths[i, 1],
-                ]
+        
+        # Select pairs with v1 shorter than v2 and angle in range:
+        TOL = 1e-6
+        theta_min = 0.5 * np.pi - TOL  # 90 degrees (with round-off margin)
+        sel1, sel2 = np.where(
+            (vector_lengths[:, None] <= vector_lengths[None, :] + TOL)  # |v1| <= |v2|
+            & (theta >= theta_min)
+            & (theta <= theta_max)
+        )
+        if not len(sel1):
+            raise KeyError(
+                f"No surface unit cells with lattice vector lengths <= {Lmax}"
+                "and a reasonable angle"
             )
+        
+        # Compute and reduce normals:
+        normals = np.cross(vectors[sel1], vectors[sel2])
+        normals_gcd = np.gcd(normals[..., 0], np.gcd(normals[..., 1], normals[..., 2]))
+        normals //= normals_gcd[..., None]
+        dir_test = surface_index if np.linalg.norm(surface_index) else (1, 1, 1)
+        preferred_dir = np.where(normals @ dir_test > 0, 0, 1)  # optimize signs of n
 
-        def compare(self, other):
-            TOL = 1e-4
-            key_diff = self.keys - other.keys
-            for d in key_diff:
-                if np.abs(d) > TOL:
-                    return int(np.copysign(1, d))
-            return 0
+        # Collect and sort selected pairs:
+        sup = np.stack((vectors[sel1], vectors[sel2], normals), axis=2)
+        a = vector_lengths[sel1]
+        b = vector_lengths[sel2]
+        theta = theta[sel1, sel2]
+        area = a * b * np.sin(theta)
+        
+        class SortKey:
+            """Indexed sorter of unit cells by area, theta, a, b."""
+            def __init__(self, i):
+                self.index = i  # index into relevant arrays
+                self.keys = np.array([area[i], theta[i], a[i], b[i], preferred_dir[i]])
 
-        def __lt__(self, other): return self.compare(other) < 0
-        def __gt__(self, other): return self.compare(other) > 0
-        def __eq__(self, other): return self.compare(other) == 0
-        def __le__(self, other): return self.compare(other) <= 0
-        def __ge__(self, other): return self.compare(other) >= 0
-        def __ne__(self, other): return self.compare(other) != 0
+            def compare(self, other, n_ignore: int = 0) -> int:
+                key_diff = self.keys - other.keys
+                if n_ignore:
+                    key_diff = key_diff[:-n_ignore]
+                for d in key_diff:
+                    if np.abs(d) > TOL:
+                        return int(np.copysign(1, d))
+                return 0
 
-    sorted_keys = sorted([SortKey(i) for i in range(len(sel1))])
-    sel = [sorted_keys[0].index]
-    for prev_key, key in zip(sorted_keys, sorted_keys[1:]):
-        if prev_key != key:
-            sel.append(key.index)
-    return unit_cells[sel], unit_cell_lengths[sel], cos_theta[sel]
+            def __lt__(self, other): return self.compare(other) < 0
+            def __gt__(self, other): return self.compare(other) > 0
+            def __eq__(self, other): return self.compare(other) == 0
+            def __le__(self, other): return self.compare(other) <= 0
+            def __ge__(self, other): return self.compare(other) >= 0
+            def __ne__(self, other): return self.compare(other) != 0
+
+        sorted_keys = sorted([SortKey(i) for i in range(len(sel1))])
+        sel = [sorted_keys[0].index]
+        for prev_key, key in zip(sorted_keys, sorted_keys[1:]):
+            if prev_key.compare(key, n_ignore=1):  # don't count preferred_dir here
+                sel.append(key.index)
+        
+        # Set properties:
+        self.bulk = bulk
+        self.sup = sup[sel]
+        self.a = a[sel]
+        self.b = b[sel]
+        self.theta = theta[sel]
+        self.area = area[sel]
+
+    def __str__(self) -> str:
+        """Neatly summarize in tabular form."""
+        lines = [
+            f"Index | {'Area':>6s} {'a':>6s} {'b':>6s} {'theta':>6s}"
+            " | surface1 | surface2 |  normal",
+            '-'*6 + '+' + '-'*29 + '+' + '-'*10 + '+' + '-'*10 + '+' + '-'*10
+        ]
+        theta_deg = np.degrees(self.theta)
+        for i, (area, a, b, theta, (a0, b0, n0, a1, b1, n1, a2, b2, n2)) in enumerate(
+            zip(self.area, self.a, self.b, theta_deg, self.sup.reshape(-1, 9))
+        ):
+            lines.append(
+                f"{i:5d} | {area:6.2f} {a:6.3f} {b:6.3f} {theta:6.2f}"
+                f" | {a0:2d} {a1:2d} {a2:2d} | {b0:2d} {b1:2d} {b2:2d}"
+                f" | {n0:2d} {n1:2d} {n2:2d}"
+            )
+        return "\n".join(lines)
 
 
-def print_candidates(
-    unit_cells: np.ndarray, unit_cell_lengths: np.ndarray, cos_theta: np.ndarray
-) -> None:
-    """Neatly summarize results of `unit_cells` in tabular form."""
-    areas = np.prod(unit_cell_lengths, axis=-1) * np.sqrt(1. - cos_theta**2)
-    angles_deg = np.degrees(np.arccos(cos_theta))
-    print(
-        f"Index | {'Area':>6s} {'a':>6s} {'b':>6s} {'theta':>6s} |  vector1 |  vector2"
-    )
-    print('-'*6 + '+' + '-'*29 + '+' + '-'*10 + '+' + '-'*10)
-    for i, (area, (a, b), theta, ((a0, a1, a2), (b0, b1, b2))) in enumerate(
-        zip(areas, unit_cell_lengths, angles_deg, unit_cells)
-    ):
-        print(
-            f"{i:5d} | {area:6.2f} {a:6.3f} {b:6.3f} {theta:6.2f}"
-            f" | {a0:2d} {a1:2d} {a2:2d} | {b0:2d} {b1:2d} {b2:2d}"
-        )
-
-
-def lattice_vectors(
-    bulk: Atoms, surface_index: np.ndarray, Lmax: float
-) -> np.ndarray:
+def lattice_vectors(bulk: Atoms, surface_index: np.ndarray, Lmax: float) -> np.ndarray:
     """
     Find surface lattice vectors for `bulk` with Miller indices `surface_index`.
     Return (N x 3) linear combination coefficients for each lattice vector
     up to maximum length `Lmax` (in Angstroms).
+    
+    If `surface_index` is (0, 0, 0), return all lattice vectors with length <= `Lmax`.
     """
     
     # Find n_max for each dimension to cover all lattice vectors with length upto Lmax
