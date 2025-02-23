@@ -56,30 +56,39 @@ class Surfaces:
         normals = np.cross(vectors[sel1], vectors[sel2])
         normals_gcd = np.gcd(normals[..., 0], np.gcd(normals[..., 1], normals[..., 2]))
         normals //= normals_gcd[..., None]
-        dir_test = surface_index if np.linalg.norm(surface_index) else (1, 1, 1)
-        preferred_dir = np.where(normals @ dir_test > 0, 0, 1)  # optimize signs of n
-
+        
         # Collect and sort selected pairs:
         sup = np.stack((vectors[sel1], vectors[sel2], normals), axis=2)
         a = vector_lengths[sel1]
         b = vector_lengths[sel2]
         theta = theta[sel1, sel2]
         area = a * b * np.sin(theta)
-        
+
+        # Determine keys for sorting output surfaces (most to least important):
+        sort_properties = [area, theta, a, b]
+        sort_properties.append(np.abs(normals).sum(axis=-1))  # simplest of equiv. specs
+        if np.linalg.norm(surface_index):
+            sort_properties.append(-normals @ surface_index)  # fix sign when possible
+        sort_properties.extend(-normals.T)  # sort descending by normal components
+        sort_properties.extend(-vectors[sel1].T)  # sort descending by v1 components        
+        sort_properties.extend(-vectors[sel2].T)  # sort descending by v2 components        
+        sort_properties = np.stack(sort_properties, axis=1)
+
         class SortKey:
             """Indexed sorter of unit cells by area, theta, a, b."""
             def __init__(self, i):
                 self.index = i  # index into relevant arrays
-                self.keys = np.array([area[i], theta[i], a[i], b[i], preferred_dir[i]])
 
-            def compare(self, other, n_ignore: int = 0) -> int:
-                key_diff = self.keys - other.keys
-                if n_ignore:
-                    key_diff = key_diff[:-n_ignore]
+            def compare(self, other) -> int:
+                key_diff = sort_properties[self.index] - sort_properties[other.index]
                 for d in key_diff:
                     if np.abs(d) > TOL:
                         return int(np.copysign(1, d))
                 return 0
+            
+            def equivalent(self, other) -> bool:
+                """Only check area for equivalence."""
+                return np.abs(area[self.index] - area[other.index]) <= TOL
 
             def __lt__(self, other): return self.compare(other) < 0
             def __gt__(self, other): return self.compare(other) > 0
@@ -91,7 +100,7 @@ class Surfaces:
         sorted_keys = sorted([SortKey(i) for i in range(len(sel1))])
         sel = [sorted_keys[0].index]
         for prev_key, key in zip(sorted_keys, sorted_keys[1:]):
-            if prev_key.compare(key, n_ignore=1):  # don't count preferred_dir here
+            if not prev_key.equivalent(key):  # pick lowest-angle of equivalent cells
                 sel.append(key.index)
         
         # Set properties:
