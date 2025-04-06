@@ -1,5 +1,7 @@
 import numpy as np
 from ase import Atoms
+from ase.build import make_supercell
+from ase.calculators.calculator import Calculator
 
 
 class Surfaces:
@@ -70,8 +72,8 @@ class Surfaces:
         if np.linalg.norm(surface_index):
             sort_properties.append(-normals @ surface_index)  # fix sign when possible
         sort_properties.extend(-normals.T)  # sort descending by normal components
-        sort_properties.extend(-vectors[sel1].T)  # sort descending by v1 components        
-        sort_properties.extend(-vectors[sel2].T)  # sort descending by v2 components        
+        sort_properties.extend(-vectors[sel1].T)  # sort descending by v1 components
+        sort_properties.extend(-vectors[sel2].T)  # sort descending by v2 components
         sort_properties = np.stack(sort_properties, axis=1)
 
         class SortKey:
@@ -128,6 +130,27 @@ class Surfaces:
                 f" | {n0:2d} {n1:2d} {n2:2d}"
             )
         return "\n".join(lines)
+
+    def make_slab(
+        self,
+        i_surface: int,
+        minimum_thickness: float,
+        vacuum_spacing: float,
+        calculator: Calculator,
+    ) -> Atoms:
+        """Make slab corresponding to index `i_surface` from search results,
+        with specified `minimum_thickness` and `vacuum_spacing` in Angstroms,
+        using the specified `calculator` to find the lowest-energy cut."""
+        # Construct smallest supercell units needed to reach thickness
+        sup_unit = self.sup[i_surface]
+        RTsup_unit = sup_unit.T @ self.bulk.cell[:]
+        volume_unit = abs(np.linalg.det(RTsup_unit))
+        base_area = np.linalg.norm(np.cross(RTsup_unit[0], RTsup_unit[1]))
+        thickness_unit = volume_unit / base_area
+        n_units = int(np.ceil(minimum_thickness / thickness_unit))
+        sup = sup_unit @ np.diag([1, 1, n_units])
+        supercell = make_supercell(self.bulk, sup.T, wrap=True, order="atom-major")
+        return supercell
 
 
 def lattice_vectors(bulk: Atoms, surface_index: np.ndarray, Lmax: float) -> np.ndarray:
