@@ -1,6 +1,6 @@
 import numpy as np
 from ase import Atoms
-from ase.build import make_supercell
+from ase.build import make_supercell, rotate
 from ase.calculators.calculator import Calculator
 
 
@@ -141,7 +141,9 @@ class Surfaces:
         """Make slab corresponding to index `i_surface` from search results,
         with specified `minimum_thickness` and `vacuum_spacing` in Angstroms,
         using the specified `calculator` to find the lowest-energy cut."""
+
         # Construct smallest supercell units needed to reach thickness
+        print(f"\nConstructing slab for surface index {i_surface}")
         sup_unit = self.sup[i_surface]
         RTsup_unit = sup_unit.T @ self.bulk.cell[:]
         volume_unit = abs(np.linalg.det(RTsup_unit))
@@ -149,8 +151,65 @@ class Surfaces:
         thickness_unit = volume_unit / base_area
         n_units = int(np.ceil(minimum_thickness / thickness_unit))
         sup = sup_unit @ np.diag([1, 1, n_units])
+        sup_thickness = n_units * thickness_unit
         supercell = make_supercell(self.bulk, sup.T, wrap=True, order="atom-major")
-        return supercell
+        print(
+            f"  Constructed surface supercell with {n_units} periodic units"
+            f" and thickness {sup_thickness:.3f} A"
+        )
+
+        # Find minimum number of equivalent sub-layers:
+        n_layers = count_layers(supercell)
+        layer_thickness = sup_thickness / n_layers
+        n_layers_needed = int(np.ceil(minimum_thickness / layer_thickness))
+        print(
+            f"  Identified {n_layers} equivalent layers"
+            f" of thickness {layer_thickness:.3f} A each\n"
+            f"  Selecting {n_layers_needed} equivalent layers"
+            f" to get slab thickness {n_layers_needed * layer_thickness:.3f} A"
+        )
+
+        # Identify potential cut planes within one equivalent layer:
+        z = supercell.get_scaled_positions(wrap=True)[:, 2]  # fractional z in [0, 1)
+        z_layer_sorted = np.sort(z[z < 1/n_layers])
+        z_layer_padded = np.concatenate(
+            (z_layer_sorted, [z_layer_sorted[0] + 1/n_layers])
+        )  # add periodically wrapped point to end (for first layer in z)
+        z_gap = z_layer_padded[1:] - z_layer_sorted  # lengths of gaps
+        gap_sel = np.where(z_gap > 1E-3)[0]  # reject tiny gaps from nearly planar atoms
+        z_gap = z_gap[gap_sel]
+        z_mid = 0.5 * (z_layer_padded[gap_sel] + z_layer_padded[gap_sel + 1])
+
+        # Evaluate all possible equivalent cuts:
+        print(f"  Evaluating {len(z_mid)} possible cuts within equivalent layer")
+        best_slab = None
+        best_energy = np.inf
+        for z_start, gap_thickness in zip(z_mid, z_gap * sup_thickness):
+            z_diff = z - z_start
+            z_diff -= np.floor(z_diff)  # (0,1) wrapped difference from cut plane
+            atom_sel = np.where(z_diff < n_layers_needed/n_layers)[0]
+            slab = supercell[atom_sel]
+            make_vacuum_orthogonal(slab)
+            slab.wrap()
+            slab.center(
+                vacuum=(vacuum_spacing + gap_thickness)/2, axis=2, about=(0, 0, 0)
+            )
+            slab.calc = calculator
+            energy = slab.get_potential_energy()
+            if energy < best_energy:
+                best_energy = energy
+                best_slab = slab
+
+        # Report surface energy
+        self.bulk.calc = calculator
+        bulk_energy = self.bulk.get_potential_energy()
+        n_bulk_units = len(best_slab) / len(self.bulk)
+        surface_energy = (best_energy - n_bulk_units * bulk_energy) / (2 * base_area)
+        print(f"  Selected cut with surface energy {surface_energy:.3} eV/A^2")
+
+        # Rotate best slab into standard orientation
+        rotate(best_slab, best_slab.cell[0], (1, 0, 0), best_slab.cell[1], (0, 1, 0))
+        return best_slab
 
 
 def lattice_vectors(bulk: Atoms, surface_index: np.ndarray, Lmax: float) -> np.ndarray:
@@ -181,3 +240,32 @@ def lattice_vectors(bulk: Atoms, surface_index: np.ndarray, Lmax: float) -> np.n
     if not len(sel):
         raise KeyError(f"No surface vectors with lengths <= {Lmax}")
     return vectors[sel]
+
+
+def count_layers(supercell: Atoms) -> int:
+    """Find the number of equivalent layers along third lattice direction of
+    a periodic supercell from the scattering structure factor. This identifies
+    symmetry-equivalent layers twisted relative to each other when applicable."""
+    Z = supercell.get_atomic_numbers()
+    uniqueZ = set(Z)
+    z = supercell.get_scaled_positions(wrap=True)[:, 2]  # fractional z coord in [0, 1)
+    MAX_LAYERS = 1000
+    SF_SQ_CUT = (len(Z) / MAX_LAYERS) ** 2  # tolerance for testing structure factor
+    # Find first finite reciprocal lattice vector with non-zero structure factor:
+    for n_layers in range(1, MAX_LAYERS):
+        Sf_sq = 0.0
+        for Zi in uniqueZ:
+            sel = np.where(Z == Zi)[0]  # atoms of this type
+            Sf_sq += np.sum(np.exp(2j * np.pi * z[sel] * n_layers)) ** 2
+        if Sf_sq > SF_SQ_CUT:
+            return n_layers
+    raise KeyError("Could not identify number of sublayers in supercell")
+
+
+def make_vacuum_orthogonal(slab: Atoms) -> None:
+    """Make the third vacuum direction of slab orthogonal to others."""
+    RT = slab.cell[:]
+    n_vec = np.cross(RT[0], RT[1])  # normal direction
+    n_hat = n_vec / np.linalg.norm(n_vec)
+    RT[2] = n_hat * (n_hat @ RT[2])  # project third direction to normal
+    slab.set_cell(RT)
