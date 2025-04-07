@@ -190,7 +190,7 @@ class Surfaces:
             atom_sel = np.where(z_diff < n_layers_needed/n_layers)[0]
             slab = supercell[atom_sel]
             make_vacuum_orthogonal(slab)
-            slab.wrap()
+            wrap_cut_plane(slab, z_start)
             slab.center(
                 vacuum=(vacuum_spacing + gap_thickness)/2, axis=2, about=(0, 0, 0)
             )
@@ -269,3 +269,10 @@ def make_vacuum_orthogonal(slab: Atoms) -> None:
     n_hat = n_vec / np.linalg.norm(n_vec)
     RT[2] = n_hat * (n_hat @ RT[2])  # project third direction to normal
     slab.set_cell(RT)
+
+def wrap_cut_plane(slab: Atoms, z_cut: float) -> None:
+    """Wrap positions relative to fractional cut plane in third direction."""
+    pos = slab.get_scaled_positions()
+    pos[:, 2] -= z_cut  # reference to cut plane
+    pos -= np.floor(pos)  # wrap to [0, 1) in all directions
+    slab.set_scaled_positions(pos)
