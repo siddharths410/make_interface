@@ -19,7 +19,6 @@ interfaces = Interfaces(surfacesAu, surfacesTiO2, strain_max)
 print(interfaces)
 
 i_interface = interfaces.strain_max.argmin()  # pick minimum strain within selections
-print(i_interface)
-#calc = MACECalculator(model_paths=["mace.model"])  # point to suitable MACE model
-#slab = surfaces.make_slab(0, 14.0, 10.0, calc)
-#ase.io.write("interface_smallest.xsf", slab)
+calc = MACECalculator(model_paths=["../mace.model"])  # point to suitable MACE model
+slab = interfaces.make_slab(i_interface, 14.0, 10.0, calc)
+ase.io.write("interface_smallest.xsf", slab)

@@ -37,7 +37,6 @@ class Interfaces:
             surfaces2.a[None, :],
             surfaces2.b[None, :],
             surfaces2.theta[None, :],
-            0.5,
         )
         area = a * b * np.sin(theta)  # basal area of averaged cell
 
@@ -73,6 +72,53 @@ class Interfaces:
             )
         return "\n".join(lines)
 
+    def make_slab(
+        self,
+        i_interface: int,
+        minimum_thickness1: float,
+        minimum_thickness2: float,
+        calculator: Calculator,
+    ) -> Atoms:
+        """Make periodically-repeated slab (superlattice) corresponding to index
+        `i_interface` from search results, with specified `minimum_thickness1`
+        and `minimum_thickness2` for the two materials in Angstroms, using
+        the specified `calculator` to find the lowest-energy stackings."""
+        index1 = int(self.index1[i_interface])
+        index2 = int(self.index2[i_interface])
+
+        # Make slabs of each material
+        VACUUM_THICKNESS = 10.0  # vacuum thickness used for slabs (removed later)
+        slab1 = self.surfaces1.make_slab(
+            index1, minimum_thickness1, VACUUM_THICKNESS, calculator
+        )
+        slab2 = self.surfaces2.make_slab(
+            index2, minimum_thickness2, VACUUM_THICKNESS, calculator
+        )
+
+        # Strain slabs to common base
+        a = self.a[i_interface]
+        b = self.b[i_interface]
+        theta = self.theta[i_interface]
+        RT = np.array([[a, 0, 0], [b * np.cos(theta), b * np.sin(theta), 0], [0, 0, 0]])
+        RT[2, 2] = slab1.cell[2, 2]
+        slab1.set_cell(RT, scale_atoms=True)
+        RT[2, 2] = slab2.cell[2, 2]
+        slab2.set_cell(RT, scale_atoms=True)
+
+        # Make slabs compatible for stacking together
+        c1 = slab1.cell[2, 2] - VACUUM_THICKNESS
+        c2 = slab2.cell[2, 2] - VACUUM_THICKNESS
+        RT[2, 2] = c1 + c2  # final combined thickness (no vacuum)
+        slab1.translate((0, 0, c1 / 2))
+        slab1.wrap()
+        slab1.set_cell(RT, scale_atoms=False)
+        slab2.translate((0, 0, c2 / 2))
+        slab2.wrap()
+        slab2.set_cell(RT, scale_atoms=False)
+        slab2.translate((0, 0, c1))  # place slab2 above slab1
+
+        return slab1 + slab2
+
 
 def compute_strain(
     a1: np.ndarray,
@@ -81,11 +127,10 @@ def compute_strain(
     a2: np.ndarray,
     b2: np.ndarray,
     theta2: np.ndarray,
-    w2: Union[np.ndarray, float],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Compute strain between 2D lattices specified by lengths and angles,
-     (a1, b1, theta1) and (a2, b2, theta2). Return the strain tensors
-     and the averaged (a, b, theta) weighted by w2 for the second lattice.
+    (a1, b1, theta1) and (a2, b2, theta2)
+    Return the strain tensors and the averaged (a, b, theta).
      Broadcastable over all inputs in order to compute pairwise over pairs
      of surfaces, or compute for a single pair of surfaces."""
     cos_theta1, sin_theta1 = np.cos(theta1), np.sin(theta1)
@@ -113,7 +158,7 @@ def compute_strain(
     strain = matrix_func(np.log, exp_strain)
 
     # Compute mid-way lattice vectors:
-    R = np.einsum('...ba, ...bc -> ...ac', matrix_func(np.exp, w2 * strain), UT @ R1)
+    R = np.einsum('...ba, ...bc -> ...ac', matrix_func(np.exp, 0.5 * strain), UT @ R1)
     lengths = np.linalg.norm(R, axis=-2)
     a = lengths[..., 0]
     b = lengths[..., 1]
