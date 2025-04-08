@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 from ase import Atoms
 from ase.build import make_supercell, rotate
@@ -116,7 +118,7 @@ class Surfaces:
     def __str__(self) -> str:
         """Neatly summarize in tabular form."""
         lines = [
-            f"Index | {'Area':>6s} {'a':>6s} {'b':>6s} {'theta':>6s}"
+            f"\nIndex | {'Area':>6s} {'a':>6s} {'b':>6s} {'theta':>6s}"
             " | surface1 | surface2 |  normal",
             '-'*6 + '+' + '-'*29 + '+' + '-'*10 + '+' + '-'*10 + '+' + '-'*10
         ]
