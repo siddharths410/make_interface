@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Union
 
 import numpy as np
+from scipy.optimize import minimize
 from ase import Atoms
 
 from . import Surfaces
@@ -78,6 +79,7 @@ class Interfaces:
         minimum_thickness1: float,
         minimum_thickness2: float,
         calculator: Calculator,
+        n_initial_offsets: int = 10,
     ) -> Atoms:
         """Make periodically-repeated slab (superlattice) corresponding to index
         `i_interface` from search results, with specified `minimum_thickness1`
@@ -99,6 +101,7 @@ class Interfaces:
         a = self.a[i_interface]
         b = self.b[i_interface]
         theta = self.theta[i_interface]
+        area = self.area[i_interface]
         RT = np.array([[a, 0, 0], [b * np.cos(theta), b * np.sin(theta), 0], [0, 0, 0]])
         RT[2, 2] = slab1.cell[2, 2]
         slab1.set_cell(RT, scale_atoms=True)
@@ -117,7 +120,48 @@ class Interfaces:
         slab2.set_cell(RT, scale_atoms=False)
         slab2.translate((0, 0, c1))  # place slab2 above slab1
 
-        return slab1 + slab2
+        # Compute reference energy
+        # Note that binidng energy reported below is relative to strained slabs
+        # This avoids including the thickness-dependent strain energy.
+        slab1.calc = calculator
+        slab2.calc = calculator
+        energy_ref = slab1.get_potential_energy() + slab2.get_potential_energy()
+
+        # Optimize relative offsets between slabs
+        def get_interface(offsets: np.ndarray) -> Atoms:
+            dx21 = offsets[:2]  # fractional offset between slab2 and slab1
+            dx_cell = dx21 + offsets[2:]  # fractional offset of next slab1
+            dx_cell -= np.floor(0.5 + dx_cell)  # wrap to [-0.5, 0.5)
+            dr21 = dx21 @ RT[:2, :2]  # Cartesian offset of slab2 from slab1
+            dr_cell = dx_cell @ RT[:2, :2]  # Cartesian offset to shear cell
+            # Shift slab2
+            slab2_shifted = slab2.copy()
+            slab2_shifted.translate((*dr21, 0.0))
+            # Shear interface
+            RT[2, :2] = dr_cell
+            interface = slab1 + slab2_shifted
+            interface.set_cell(RT, scale_atoms=False)
+            return interface
+
+        def get_energy(offsets: np.ndarray) -> float:
+            interface = get_interface(offsets)
+            interface.calc = calculator
+            surf_energy = (interface.get_potential_energy() - energy_ref) / (2 * area)
+            return surf_energy
+
+        print("\nOptimizing stacking of slabs:")
+        best_energy = np.inf
+        best_offsets = None
+        for i_initial_offset in range(n_initial_offsets):
+            res = minimize(get_energy, np.random.rand(4), method='BFGS', tol=1E-4)
+            energy = res.fun
+            print(f"  Offset: {i_initial_offset}  surface binding: {energy:.3} eV/A^2")
+            if energy < best_energy:
+                best_energy = energy
+                best_offsets = res.x
+
+        print(f"  Selected best stacking with surface binding {best_energy:.3} eV/A^2")
+        return get_interface(best_offsets)
 
 
 def compute_strain(
