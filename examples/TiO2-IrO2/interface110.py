@@ -20,5 +20,5 @@ print(interfaces)
 
 i_interface = 0  # pick smallest area interface
 calc = MACECalculator(model_paths=["../mace.model"], device="cuda")
-slab = interfaces.make_slab(i_interface, 14.0, 10.0, calc, 3)
+slab, _, _ = interfaces.make_slab(i_interface, 14.0, 10.0, calc, 3)
 ase.io.write("interface110.xsf", slab)

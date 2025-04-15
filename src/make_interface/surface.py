@@ -39,7 +39,12 @@ class Surfaces:
         
         # Compute angle between all pairs of vectors:
         theta = np.arccos(
-            (vectors_cart @ vectors_cart.T) / np.outer(vector_lengths, vector_lengths)
+            np.clip(
+                (vectors_cart @ vectors_cart.T)
+                / np.outer(vector_lengths, vector_lengths),
+                -1,
+                +1
+            )
         )
         
         # Select pairs with v1 shorter than v2 and angle in range:

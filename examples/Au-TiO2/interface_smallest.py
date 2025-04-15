@@ -20,5 +20,5 @@ print(interfaces)
 
 i_interface = interfaces.strain_max.argmin()  # pick minimum strain within selections
 calc = MACECalculator(model_paths=["../mace.model"], device="cuda")
-slab = interfaces.make_slab(i_interface, 14.0, 10.0, calc, 3)
+slab, _, _ = interfaces.make_slab(i_interface, 14.0, 10.0, calc, 3)
 ase.io.write("interface_smallest.xsf", slab)

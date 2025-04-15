@@ -80,11 +80,12 @@ class Interfaces:
         minimum_thickness2: float,
         calculator: Calculator,
         n_initial_offsets: int = 10,
-    ) -> Atoms:
+    ) -> tuple[Atoms, Atoms, Atoms]:
         """Make periodically-repeated slab (superlattice) corresponding to index
         `i_interface` from search results, with specified `minimum_thickness1`
         and `minimum_thickness2` for the two materials in Angstroms, using
-        the specified `calculator` to find the lowest-energy stackings."""
+        the specified `calculator` to find the lowest-energy stackings.
+        Also return the individual slabs stacked to form the interface."""
         index1 = int(self.index1[i_interface])
         index2 = int(self.index2[i_interface])
 
@@ -121,7 +122,7 @@ class Interfaces:
         slab2.translate((0, 0, c1))  # place slab2 above slab1
 
         # Compute reference energy
-        # Note that binidng energy reported below is relative to strained slabs
+        # Note that binding energy reported below is relative to strained slabs
         # This avoids including the thickness-dependent strain energy.
         slab1.calc = calculator
         slab2.calc = calculator
@@ -161,7 +162,7 @@ class Interfaces:
                 best_offsets = res.x
 
         print(f"  Selected best stacking with surface binding {best_energy:.3} eV/A^2")
-        return get_interface(best_offsets)
+        return get_interface(best_offsets), slab1, slab2
 
 
 def compute_strain(

@@ -18,5 +18,5 @@ interfaces = Interfaces(surfacesAg, surfacesAu, strain_max)
 print(interfaces)
 
 i_interface = 0  # pick smallest area within selections
-slab = interfaces.make_slab(i_interface, 14.0, 10.0, EMT(), 3)
+slab, _, _ = interfaces.make_slab(i_interface, 14.0, 10.0, EMT(), 3)
 ase.io.write("interface111.xsf", slab)
