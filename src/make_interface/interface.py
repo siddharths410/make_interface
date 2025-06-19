@@ -80,11 +80,14 @@ class Interfaces:
         minimum_thickness2: float,
         calculator: Calculator,
         n_initial_offsets: int = 10,
+        *,
+        TOL = 1E-6,
     ) -> tuple[Atoms, Atoms, Atoms]:
         """Make periodically-repeated slab (superlattice) corresponding to index
         `i_interface` from search results, with specified `minimum_thickness1`
         and `minimum_thickness2` for the two materials in Angstroms, using
         the specified `calculator` to find the lowest-energy stackings.
+        TOL specifies the tolerance in detecting equivalent layers.
         Also return the individual slabs stacked to form the interface."""
         index1 = int(self.index1[i_interface])
         index2 = int(self.index2[i_interface])
@@ -92,10 +95,10 @@ class Interfaces:
         # Make slabs of each material
         VACUUM_THICKNESS = 10.0  # vacuum thickness used for slabs (removed later)
         slab1 = self.surfaces1.make_slab(
-            index1, minimum_thickness1, VACUUM_THICKNESS, calculator
+            index1, minimum_thickness1, VACUUM_THICKNESS, calculator, TOL=TOL
         )
         slab2 = self.surfaces2.make_slab(
-            index2, minimum_thickness2, VACUUM_THICKNESS, calculator
+            index2, minimum_thickness2, VACUUM_THICKNESS, calculator, TOL=TOL
         )
 
         # Strain slabs to common base

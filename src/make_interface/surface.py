@@ -21,6 +21,8 @@ class Surfaces:
         surface_index: np.ndarray,
         Lmax: float,
         theta_max=np.radians(135),
+        *,
+        TOL = 1E-5,
     ) -> None:
         """
         Find surface unit cells of `bulk` with miller index `surface_index`,
@@ -48,7 +50,6 @@ class Surfaces:
         )
         
         # Select pairs with v1 shorter than v2 and angle in range:
-        TOL = 1e-6
         theta_min = 0.5 * np.pi - TOL  # 90 degrees (with round-off margin)
         sel1, sel2 = np.where(
             (vector_lengths[:, None] <= vector_lengths[None, :] + TOL)  # |v1| <= |v2|
@@ -96,8 +97,10 @@ class Surfaces:
                 return 0
             
             def equivalent(self, other) -> bool:
-                """Only check area for equivalence."""
-                return np.abs(area[self.index] - area[other.index]) <= TOL
+                """Only check area and angle for equivalence."""
+                area_equal = (np.abs(area[self.index] - area[other.index]) <= TOL)
+                theta_equal = (np.abs(theta[self.index] - theta[other.index]) <= TOL)
+                return area_equal and theta_equal
 
             def __lt__(self, other): return self.compare(other) < 0
             def __gt__(self, other): return self.compare(other) > 0
@@ -109,7 +112,7 @@ class Surfaces:
         sorted_keys = sorted([SortKey(i) for i in range(len(sel1))])
         sel = [sorted_keys[0].index]
         for prev_key, key in zip(sorted_keys, sorted_keys[1:]):
-            if not prev_key.equivalent(key):  # pick lowest-angle of equivalent cells
+            if not prev_key.equivalent(key):  # pick first of equivalent cells
                 sel.append(key.index)
         
         # Set properties:
@@ -144,10 +147,13 @@ class Surfaces:
         minimum_thickness: float,
         vacuum_spacing: float,
         calculator: Calculator,
+        *,
+        TOL = 1E-6,
     ) -> Atoms:
         """Make slab corresponding to index `i_surface` from search results,
         with specified `minimum_thickness` and `vacuum_spacing` in Angstroms,
-        using the specified `calculator` to find the lowest-energy cut."""
+        using the specified `calculator` to find the lowest-energy cut.
+        TOL specifies the tolerance in detecting equivalent layers."""
 
         # Construct smallest supercell units needed to reach thickness
         print(f"\nConstructing slab for surface index {i_surface}")
@@ -166,7 +172,7 @@ class Surfaces:
         )
 
         # Find minimum number of equivalent sub-layers:
-        n_layers = count_layers(supercell)
+        n_layers = count_layers(supercell, TOL=TOL)
         layer_thickness = sup_thickness / n_layers
         n_layers_needed = int(np.ceil(minimum_thickness / layer_thickness))
         print(
@@ -249,7 +255,7 @@ def lattice_vectors(bulk: Atoms, surface_index: np.ndarray, Lmax: float) -> np.n
     return vectors[sel]
 
 
-def count_layers(supercell: Atoms) -> int:
+def count_layers(supercell: Atoms, *, TOL) -> int:
     """Find the number of equivalent layers along third lattice direction of
     a periodic supercell from the scattering structure factor. This identifies
     symmetry-equivalent layers twisted relative to each other when applicable."""
@@ -257,7 +263,7 @@ def count_layers(supercell: Atoms) -> int:
     uniqueZ = set(Z)
     z = supercell.get_scaled_positions(wrap=True)[:, 2]  # fractional z coord in [0, 1)
     MAX_LAYERS = 1000
-    SF_SQ_CUT = (len(Z) / MAX_LAYERS) ** 2  # tolerance for testing structure factor
+    SF_SQ_CUT = TOL * (len(Z)  ** 2)  # tolerance for testing structure factor
     # Find first finite reciprocal lattice vector with non-zero structure factor:
     for n_layers in range(1, MAX_LAYERS):
         Sf_sq = 0.0
