@@ -263,7 +263,7 @@ def count_layers(supercell: Atoms) -> int:
         Sf_sq = 0.0
         for Zi in uniqueZ:
             sel = np.where(Z == Zi)[0]  # atoms of this type
-            Sf_sq += np.sum(np.exp(2j * np.pi * z[sel] * n_layers)) ** 2
+            Sf_sq += np.abs(np.sum(np.exp(2j * np.pi * z[sel] * n_layers))) ** 2
         if Sf_sq > SF_SQ_CUT:
             return n_layers
     raise KeyError("Could not identify number of sublayers in supercell")
